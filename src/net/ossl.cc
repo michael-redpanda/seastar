@@ -1444,8 +1444,15 @@ private:
             }
 
             SSL_CTX_set_options(
-              ssl_ctx.get(), SSL_OP_ALL | SSL_OP_ALLOW_CLIENT_RENEGOTIATION);
+              ssl_ctx.get(), SSL_OP_ALL | SSL_OP_ALLOW_CLIENT_RENEGOTIATION | SSL_OP_CIPHER_SERVER_PREFERENCE);
         }
+
+        if (!SSL_CTX_set_min_proto_version(ssl_ctx.get(), TLS1_VERSION)) {
+            throw ossl_error::make_ossl_error(
+                "Failed to set minimum TLS version to 1"
+            );
+        }
+        SSL_CTX_set_security_level(ssl_ctx.get(), 0);
 
         // Servers must supply both certificate and key, clients may
         // optionally use these
@@ -1466,10 +1473,10 @@ private:
         SSL_CTX_set1_cert_store(ssl_ctx.get(), *_creds);
 
         if (_creds->get_priority_string() != "") {
-            // if (SSL_CTX_set_cipher_list(ssl_ctx.get(),
-            // _creds->get_priority_string().c_str()) != 1) {
-            //     throw ossl_error::make_ossl_error("Failed to set priority list");
-            // }
+            if (SSL_CTX_set_cipher_list(ssl_ctx.get(),
+            _creds->get_priority_string().c_str()) != 1) {
+                throw ossl_error::make_ossl_error("Failed to set priority list");
+            }
         }
         return ssl_ctx;
     }
