@@ -43,6 +43,67 @@ public:
 
 namespace tls {
 
+extern logger tls_log;
+
+template<class S>
+class tls_session_logger {
+public:
+    explicit tls_session_logger(S * session) : _session(session) {}
+
+    template<typename... Args>
+    void error(const char* fmt, Args&&... args) {
+        log(log_level::error, std::move(fmt), std::forward<Args>(args)...);
+    }
+
+    template<typename... Args>
+    void warn(const char* fmt, Args&&... args) {
+        log(log_level::warn, std::move(fmt), std::forward<Args>(args)...);
+    }
+
+    template<typename... Args>
+    void info(const char* fmt, Args&&... args) {
+        log(log_level::info, std::move(fmt), std::forward<Args>(args)...);
+    }
+
+    template<typename... Args>
+    void debug(const char* fmt, Args&&... args) {
+        log(log_level::debug, std::move(fmt), std::forward<Args>(args)...);
+    }
+
+    template<typename... Args>
+    void trace(const char* fmt, Args&&... args) {
+        log(log_level::trace, std::move(fmt), std::forward<Args>(args)...);
+    }
+
+    template<typename... Args>
+    sstring sformat(fmt::format_string<Args...> format_str, Args&&... args) {
+        fmt::memory_buffer buf;
+        fmt::format_to(std::back_inserter(buf), format_str, std::forward<Args>(args)...);
+        return {buf.begin(), buf.end()};
+    }
+
+    template<typename... Args>
+    void log(log_level lvl, const char* fmt, Args&&... args) noexcept {
+        if (tls_log.is_enabled(lvl)) {
+            auto line_fmt = format(fmt, std::forward<Args>(args)...);
+            tls_log.log(lvl, "{}", line_fmt);
+        }
+    }
+
+    template<typename... Args>
+    sstring format(const char * fmt, Args&&... args) {
+        auto line_fmt = sstring("{}:{}:{} - ") + fmt;
+        return sformat(
+            fmt::runtime(fmt::string_view(line_fmt.begin(), line_fmt.length())),
+            _session->get_type_string(),
+            _session->local_address(),
+            _session->remote_address(),
+            std::forward<Args>(args)...);
+    }
+private:
+    S * _session;
+};
+
 class session_impl {
 public:
     virtual future<> put(net::packet) = 0;
