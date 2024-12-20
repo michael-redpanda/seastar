@@ -85,7 +85,22 @@ struct is_error_code_enum<seastar::ossl_errc> : true_type {};
 
 template<>
 struct fmt::formatter<seastar::ossl_errc> : public fmt::formatter<std::string_view> {
+    /**
+     * Some OpenSSL errors are hard to parse.  This method can be used to provide
+     * an alternative, more readable, error message.
+     */
+    static std::optional<seastar::sstring> alternate_message(unsigned long error) {
+        if (error == seastar::tls::ERROR_UNEXPECTED_PACKET) {
+            return "Wrong SSL Version number: ensure client is configured to use TLS";
+        }
+
+        return std::nullopt;
+    }
     auto format(seastar::ossl_errc error, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+        auto alternate = alternate_message(static_cast<unsigned long>(error));
+        if (alternate.has_value()) {
+            return fmt::format_to(ctx.out(), "{}", alternate.value());
+        }
         constexpr size_t error_buf_size = 256;
         // Buffer passed to ERR_error_string must be at least 256 bytes large
         // https://www.openssl.org/docs/man3.0/man3/ERR_error_string_n.html
@@ -2068,7 +2083,7 @@ const int seastar::tls::ERROR_PUSH = int(ERR_SYSTEM_FLAG | EPIPE);
 const int seastar::tls::ERROR_PULL = ERR_PACK(
   ERR_LIB_SSL, 0, SSL_R_READ_BIO_NOT_SET);
 const int seastar::tls::ERROR_UNEXPECTED_PACKET = ERR_PACK(
-  ERR_LIB_SSL, 0, SSL_R_UNEXPECTED_MESSAGE);
+  ERR_LIB_SSL, 0, SSL_R_WRONG_VERSION_NUMBER);
 const int seastar::tls::ERROR_UNSUPPORTED_VERSION = ERR_PACK(
   ERR_LIB_SSL, 0, SSL_R_UNSUPPORTED_SSL_VERSION);
 const int seastar::tls::ERROR_NO_CIPHER_SUITES = ERR_PACK(
