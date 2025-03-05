@@ -939,13 +939,26 @@ public:
         switch(ssl_err) {
         case SSL_ERROR_ZERO_RETURN:
             // Indicates a hang up somewhere
-            // Mark _eof and stop iteratio
+            // Complete the send
             _eof = true;
-            return make_ready_future<stop_iteration>(stop_iteration::yes);
+            return wait_for_output().then([] {
+                return stop_iteration::yes;
+            });
+        case SSL_ERROR_WANT_READ:
+            // This should not be occurring during a write but may indicate an attempt
+            // to perform a renegotiation.  Resolve the write, wait for input and retry
+            return wait_for_output().then([this] {
+                return wait_for_input().then([] {
+                    return stop_iteration::no;
+                });
+            });
         case SSL_ERROR_NONE:
             // Should not have been reached in this situation
             // Continue iteration
-            return make_ready_future<stop_iteration>(stop_iteration::no);
+            [[fallthrough]];
+        case SSL_ERROR_WANT_WRITE:
+            // Unable to send data due to pending output, wait for it to resolve and retry
+            return wait_for_output().then([] { return stop_iteration::no; });
         case SSL_ERROR_SYSCALL:
         {
             auto err = make_ossl_error("System error encountered during SSL write");
@@ -983,10 +996,7 @@ public:
     // This function takes and holds the sempahore units for _out_sem and
     // will attempt to send the provided packet.  If a renegotiation is needed
     // any unprocessed part of the packet is returned.
-    future<net::packet> do_put(net::packet p) {
-        if (!connected()) {
-            return make_ready_future<net::packet>(std::move(p));
-        }
+    future<> do_put(net::packet p) {
         assert(_output_pending.available());
         return do_with(std::move(p),
             [this](net::packet& p) {
@@ -1005,14 +1015,6 @@ public:
                                 _ssl.get(), frag_view.data(), frag_view.size(), &bytes_written);
                             if (write_rc != 1) {
                                 const auto ssl_err = SSL_get_error(_ssl.get(), write_rc);
-                                if (ssl_err == SSL_ERROR_WANT_WRITE) {
-                                    return wait_for_output().then([] {
-                                        return stop_iteration::no;
-                                    });
-                                } else if (!connected() || ssl_err == SSL_ERROR_WANT_READ) {
-                                    ERR_clear_error();
-                                    return make_ready_future<stop_iteration>(stop_iteration::yes);
-                                }
                                 return handle_do_put_ssl_err(ssl_err);
                             } else {
                                 frag_view.remove_prefix(bytes_written);
@@ -1023,9 +1025,7 @@ public:
                             }
                         });
                     }
-                ).then([&p] {
-                    return std::move(p);
-                });
+                );
             }
         );
     }
@@ -1057,14 +1057,6 @@ public:
         }
         return with_semaphore(_out_sem, 1, [this, p = std::move(p)]() mutable {
             return do_put(std::move(p));
-        }).then([this](net::packet p) {
-            if (eof() || p.len() == 0) {
-                return make_ready_future();
-            } else {
-                return handshake().then([this, p = std::move(p)]() mutable {
-                    return put(std::move(p));
-                });
-            }
         });
     }
 
